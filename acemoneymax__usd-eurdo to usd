@@ -1,0 +1,401 @@
+ve <?php
+/*
+Plugin Name: Ace Money Product Shipping Options for US
+Description: A plugin to dynamically append the shipping charges and the custom import charges to the product price according to the product weight and the exchange rates for US.
+Version: 1.0.1
+Plugin URI: https://labs.flashify.ae
+Author: Sapna Fernando
+Author URI: https://www.fiverr.com/sapnanadeeshani
+*/
+
+function register_exchange_rate_settings_page() {
+    add_menu_page(
+        'Exchange Rates',
+        'Exchange Rates',
+        'manage_options',
+        'exchange-rates',
+        'exchange_rate_settings_page_callback',
+        'dashicons-money-alt',
+        20
+    );
+}
+add_action('admin_menu', 'register_exchange_rate_settings_page');
+
+function exchange_rate_settings_page_callback() {
+    ?>
+    <div class="wrap">
+        <h1>Exchange Rates</h1>
+        <form method="post" action="options.php">
+            <?php
+            settings_fields('exchange_rates_group'); 
+            do_settings_sections('exchange-rates'); 
+            submit_button();
+            ?>
+        </form>
+    </div>
+    <?php
+}
+
+function initialize_exchange_rate_settings() {
+    register_setting(
+        'exchange_rates_group',
+        'exchange_rates', 
+        'sanitize_exchange_rates' 
+    );
+
+    add_settings_section(
+        'exchange_rates_section',
+        'Manage Exchange Rates', 
+        'exchange_rates_section_callback', 
+        'exchange-rates' 
+    );
+
+    
+    $currencies = ['USD', 'EUR']; 
+    foreach ($currencies as $currency) {
+        add_settings_field(
+            'exchange_rate_' . strtolower($currency), 
+            $currency . ' to USD Rate', 
+            'exchange_rate_field_callback', 
+            'exchange-rates',
+            'exchange_rates_section', 
+            ['currency' => $currency] 
+        );
+    }
+}
+add_action('admin_init', 'initialize_exchange_rate_settings');
+
+function exchange_rates_section_callback() {
+    echo '<p>Set the exchange rates for each currency.</p>';
+}
+
+function exchange_rate_field_callback($args) {
+    $options = get_option('exchange_rates');
+    $rate = isset($options[$args['currency']]) ? $options[$args['currency']] : '';
+    echo "<input type='text' name='exchange_rates[" . esc_attr($args['currency']) . "]' value='" . esc_attr($rate) . "' />";
+}
+
+function sanitize_exchange_rates($inputs) {
+    foreach ($inputs as $key => $value) {
+        $inputs[$key] = is_numeric($value) ? floatval($value) : 1;
+    }
+    return $inputs;
+}
+
+add_action( 'woocommerce_product_options_shipping', 'add_origin_product_options' );
+function add_origin_product_options() {
+    woocommerce_wp_radio( array(
+        'id'          => '_product_origin',
+        'label'       => __('Product Origin', 'woocommerce'),
+        'options'     => array(
+            'european' => __('European', 'woocommerce'),
+            'american' => __('American', 'woocommerce')
+        ),
+        'description' => __('Select the Origin region for this product.', 'woocommerce'),
+    ));
+}
+
+add_action( 'woocommerce_process_product_meta', 'save_origin_fields_product_options' );
+function save_origin_fields_product_options( $post_id ) {
+    $region_type = isset( $_POST['_product_origin'] ) ? $_POST['_product_origin'] : '';
+    update_post_meta( $post_id, '_product_origin', sanitize_text_field( $region_type ) );
+}
+
+add_action('admin_menu', 'register_my_custom_menu_page');
+
+function register_my_custom_menu_page(){
+    add_menu_page(
+        'Shipping Charges', 
+        'Shipping Charges', 
+        'manage_options', 
+        'shipping_charges', 
+        'shipping_charges_admin_page', 
+        'dashicons-airplane', 
+        6  
+    );
+}
+
+function shipping_charges_admin_page(){
+    ?>
+    <div class="wrap">
+        <h2>Shipping Charges</h2>
+        <h2 class="nav-tab-wrapper">
+            <a href="#european" class="nav-tab">European</a>
+            <a href="#american" class="nav-tab">American</a>
+        </h2>
+
+        <form method="post" action="options.php" style="
+    text-align: center;">
+            <?php
+            settings_fields('shipping_charges_group');
+            do_settings_sections('shipping_charges');
+            submit_button();
+            ?>
+
+            <div id="european" class="tab-content">
+                <?php draw_shipping_table('european'); ?>
+            </div>
+            <div id="american" class="tab-content">
+                <?php draw_shipping_table('american'); ?>
+            </div>
+        </form>
+    </div>
+	
+    <style>
+
+.form-table th {
+    text-align: center;
+}	
+.form-table td {
+    text-align: center;
+}	
+
+	</style>
+
+    <script>
+        jQuery(document).ready(function($){
+            $('.nav-tab').click(function(){
+                $('.nav-tab').removeClass('nav-tab-active');
+                $(this).addClass('nav-tab-active');
+                $('.tab-content').hide();
+                $($(this).attr('href')).show();
+                return false;
+            }).first().click();
+			
+    $('#add-row-european').click(function() {
+        
+        $('#table-european tr:hidden').first().show();
+    });
+
+    $('#add-row-american').click(function() {
+       
+        $('#table-american tr:hidden').first().show();
+    });
+			
+        });
+	
+    </script>
+    <?php
+}
+
+function draw_shipping_table($region) {
+    $countries_obj = new WC_Countries();
+    $countries = $countries_obj->get_allowed_countries();
+
+    $option_name = $region . '_shipping_charges';
+    $shipping_data = get_option($option_name, array());
+    $currency = ($region == 'european') ? 'EUR - &euro;' : 'USD - $';
+
+    echo "<h3>Shipping Charges for $region products</h3>";
+    echo "<table class='form-table' id='table-$region' ><thead><tr><th>Country</th><th>Weight From (kg)</th><th>Weight To (kg)</th><th>Shipping Charge ($currency)</th><th>Custom Duty (in %)</th></tr></thead><tbody>";
+
+    $display_row = true; 
+    for ($i = 0; $i < 40; $i++) {
+        $data = $shipping_data[$i] ?? ['country' => '', 'weight_from' => '', 'weight_to' => '', 'shipping_charge' => '', 'custom_duty' => ''];
+        $row_style = $display_row ? "" : "style='display: none;'"; // Hide rows with no initial data
+        echo "<tr $row_style>";
+        echo "<td><select name='{$option_name}[$i][country]'>";
+        echo "<option value=''>Select the Country</option>";
+        foreach ($countries as $code => $name) {
+            $selected = ($data['country'] === $code) ? 'selected' : '';
+            echo "<option value='$code' $selected>$name</option>";
+        }
+        echo "</select></td>";
+        echo "<td><input type='text' name='{$option_name}[$i][weight_from]' value='{$data['weight_from']}' /></td>";
+        echo "<td><input type='text' name='{$option_name}[$i][weight_to]' value='{$data['weight_to']}' /></td>";
+        echo "<td><input type='text' name='{$option_name}[$i][shipping_charge]' value='{$data['shipping_charge']}' /></td>";
+        echo "<td><input type='text' name='{$option_name}[$i][custom_duty]' value='{$data['custom_duty']}' /></td>";
+		
+        echo "</tr>";
+
+        $display_row = (!empty($data['country']) || !empty($data['weight_from']) || !empty($data['weight_to']) || !empty($data['shipping_charge']) || !empty($data['custom_duty']));
+    }
+
+    echo "</tbody></table>";
+    echo "<button type='button' id='add-row-$region'>Add Row</button>";
+}
+
+
+
+function register_shipping_charges_settings() {
+    register_setting('shipping_charges_group', 'european_shipping_charges', 'sanitize_shipping_charges');
+    register_setting('shipping_charges_group', 'american_shipping_charges', 'sanitize_shipping_charges');
+}
+add_action('admin_init', 'register_shipping_charges_settings');
+
+function sanitize_shipping_charges($inputs) {
+    $new_inputs = [];
+    foreach ($inputs as $input) {
+        $sanitized_input = [
+            'country' => sanitize_text_field($input['country']),
+            'weight_from' => sanitize_text_field($input['weight_from']),
+            'weight_to' => sanitize_text_field($input['weight_to']),
+            'shipping_charge' => sanitize_text_field($input['shipping_charge']),
+            'custom_duty' => sanitize_text_field($input['custom_duty'])
+        ];
+        $new_inputs[] = $sanitized_input;
+    }
+    return $new_inputs;
+}
+
+
+add_filter('woocommerce_product_get_price', 'adjust_product_price', 10, 2);
+add_filter('woocommerce_product_variation_get_price', 'adjust_product_price', 10, 2);
+add_filter('woocommerce_product_get_regular_price', 'adjust_product_price', 10, 2);
+add_filter('woocommerce_product_variation_get_regular_price', 'adjust_product_price', 10, 2); 
+add_filter('woocommerce_product_get_sale_price', 'adjust_product_price', 10, 2);
+add_filter('woocommerce_product_variation_get_sale_price', 'adjust_product_price', 10, 2);
+
+
+
+function adjust_product_price($price, $product) {
+ 	error_log('Old Price'.$price);
+    $product_id = $product->get_id();
+    if ($product instanceof WC_Product_Variation) {
+        $product_id = $product->get_parent_id();
+    }
+	error_log('product ID'.$product_id);
+	if (!is_admin()) {
+    	$customer_country = WC()->customer->get_shipping_country();
+	}
+
+	
+	 if (empty($customer_country)) {
+        $customer_country = WC_Geolocation::geolocate_ip()['country'];
+     }
+
+    // Default to 'US' 
+    $customer_country = !empty($customer_country) ? $customer_country : 'US';
+	
+    // Default to 'US' FOR TROUBLE SHOOTING AND CONSISTANCY
+    $customer_country = 'US';	
+	
+    $weight = $product->get_weight();
+    $origin = get_post_meta($product_id, '_product_origin', true);
+    $exchange_rates = get_option('exchange_rates');
+    $exchange_rate = 1; 
+
+    if ($origin === 'european' && isset($exchange_rates['EUR'])) {
+        $exchange_rate = $exchange_rates['EUR'];
+    } elseif ($origin === 'american' && isset($exchange_rates['USD'])) {
+        $exchange_rate = $exchange_rates['USD'];
+    }
+
+    $charges = get_shipping_and_duty_charges($customer_country,$weight, $origin);
+    if ($charges) {
+        $shipping_charge = $charges['shipping_charge'];
+        $new_price = floatval($price) + floatval($shipping_charge);
+        $import_charge = $new_price * ($charges['custom_duty'] / 100);
+        $price = ($new_price + $import_charge)* $exchange_rate;
+    }
+
+    return $price;
+}
+
+add_filter('woocommerce_variable_price_html', 'custom_variable_price_html', 10, 2);
+
+function custom_variable_price_html($price_html, $product) {
+    if (is_admin()) {
+        return $price_html;
+    }
+
+    $variations = $product->get_available_variations();
+
+    $regular_prices = [];
+    $sale_prices = [];
+
+    foreach ($variations as $variation) {
+        $variation_id = $variation['variation_id'];
+        $variation_product = wc_get_product($variation_id);
+
+        $regular_price = $variation_product->get_regular_price();
+        $sale_price = $variation_product->get_sale_price();
+
+        if ($regular_price) {
+            $regular_prices[] = $regular_price;
+        }
+        if ($sale_price) {
+            $sale_prices[] = $sale_price;
+        }
+    }
+
+    if (!empty($sale_prices)) {
+        $min_sale_price = max($sale_prices);
+        $min_regular_price = max($regular_prices);
+        if ($min_sale_price < $min_regular_price) {
+            $price_html = '<del>' . wc_price($min_regular_price) . '</del> <ins>' . wc_price($min_sale_price) . '</ins>';
+        } else {
+            $price_html = wc_price($min_regular_price);
+        }
+    } else {
+        $min_regular_price = min($regular_prices);
+        $price_html = wc_price($min_regular_price);
+    }
+
+    return $price_html;
+}
+/*
+add_filter('woocommerce_variable_price_html', 'custom_variable_price_html', 10, 2);
+
+function custom_variable_price_html($price_html, $product) {
+    $min_price = $product->get_variation_price('min', true);
+    $max_price = $product->get_variation_price('max', true);
+
+    $min_price_adjusted = adjust_product_price($min_price, $product);
+    $max_price_adjusted = adjust_product_price($max_price, $product);
+
+    if ($min_price_adjusted !== $max_price_adjusted) {
+        $price_html = wc_price($min_price_adjusted) . ' – ' . wc_price($max_price_adjusted);
+    } else {
+        $price_html = wc_price($min_price_adjusted);
+    }
+
+    return $price_html;
+}
+
+add_filter('woocommerce_available_variation', 'customize_variation_price_html', 10, 3);
+
+function customize_variation_price_html($variation_data, $product, $variation) {
+    $regular_price = $variation->get_regular_price();
+    $sale_price = $variation->get_sale_price();
+	error_log('regular price'.$regular_price);
+	error_log('Sale price'.$sale_price);
+
+    $regular_price_adjusted = adjust_product_price($regular_price, $product);
+    $sale_price_adjusted = adjust_product_price($sale_price, $product);	
+	
+	error_log('regular price adjusted'.$regular_price_adjusted);
+	error_log('Sale price adjusted'.$sale_price_adjusted);
+	
+    if ($sale_price_adjusted && $sale_price_adjusted < $regular_price_adjusted) {
+        $variation_data['price_html'] = '<del>' . wc_price($regular_price_adjusted) . '</del> <ins>' . wc_price($sale_price_adjusted) . '</ins>';
+		error_log('PARSED updated variation Item Data: ' . print_r($variation_data, true)); 
+    } else {
+        $variation_data['price_html'] = wc_price($regular_price_adjusted);
+		error_log('PARSED variation Item Data: ' . print_r($variation_data, true)); 
+    }
+	//error_log('PARSED variation Item Data: ' . print_r($variation_data, true)); 
+    return $variation_data;
+}*/
+
+function get_shipping_and_duty_charges($country, $weight, $origin) {
+    $option_key = $origin . '_shipping_charges'; 
+    $shipping_data = get_option($option_key);
+    $shipping_rates = maybe_unserialize($shipping_data);
+
+    if (!is_array($shipping_rates)) {
+        return null; 
+    }
+
+    foreach ($shipping_rates as $rates) {
+        if ($country === $rates['country'] && $weight >= (float)$rates['weight_from'] && $weight <= (float)$rates['weight_to']) {
+            return [
+                'shipping_charge' => (float)$rates['shipping_charge'],
+                'custom_duty' => (float)$rates['custom_duty']
+            ];
+        }
+    }
+
+    return null; 
+}
+
